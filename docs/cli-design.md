@@ -396,8 +396,8 @@ explicit flags take precedence.
 | `--draft-head-quantization {nvfp4,mxfp8}` | Prepare a separate proposal vocabulary head while retaining target-head precision. NVFP4 supports DeepSeek V4/V4.1; MXFP8 supports DeepSeek V4.1. Qwen3.8 dense supports both when the source checkpoint head is BF16, including `qwen3.8-27b-qad`; the packed NVIDIA head cannot be converted through this option. Flash Next supports both with `--speculative-method dflash2` and a BF16 target vocabulary head. This does not quantize the draft body. | Checkpoint precision |
 | `--mtp-draft-tokens N` | Most draft tokens verified in one round; see `MODEL --help` for its limit. Verification capacities cover counts from 0 through `N` within the speculative token capacity. Each complete speculative program records its actual proposal depth independently of target width and aggregate rows. Prefix selection uses measured complete-program cost and completed acceptance or confidence. Zero retains draft state with width-one execution; `--no-mtp` excludes draft weights and state. | Recipe declaration |
 | `--speculative-token-capacity N` | Maximum physical target-token rows in wider speculative graphs; width one covers every request bucket. Applies to every speculative recipe. | 128 except Gemma 4, which derives it from concurrency and draft depth (6 at its defaults) |
-| `--speculative-graph-budget N` | Maximum packed round graphs to capture, independently of physical target-token rows. Excludes mandatory width-one and ordinary graphs; requires packed adaptive learned speculation at positive draft depth. Must cover both physical-row endpoints for every eligible request bucket. | 64 for packed recipes |
-| `--no-mtp-adaptive-verification` | Default to fixed-width serving. Capture includes every smaller width within the speculative token capacity. GPU confidence allocation requires adaptive selection; host-allocated ragged programs support fixed selection. | Adaptive |
+| `--speculative-graph-budget N` | Maximum packed round graphs to capture, independently of physical target-token rows. Excludes mandatory width-one and ordinary graphs; requires packed learned speculation at positive draft depth. GPU prefix allocation also requires adaptive verification. Must cover both physical-row endpoints for every eligible request bucket. | 64 for packed recipes |
+| `--no-mtp-adaptive-verification` | Default to fixed-width serving. Rectangular catalogs retain smaller widths within the speculative token capacity; parallel DFlash2 catalogs capture width one and the selected positive draft depth. GPU confidence allocation requires adaptive selection; host-allocated ragged programs support fixed selection. | Adaptive |
 | `--mla-compute-mode {auto,bf16}` | Constrain DeepSeek V4.1 MLA arithmetic while preserving packed KV storage and autotuning among compatible kernels. | Recipe default: `bf16` for DeepSeek V4.1, `auto` otherwise |
 | `--no-stream-overlap` | Run every concurrent branch (shared experts, projection chains, query chains) serially on the main stream with the same kernels, to diagnose scheduling-dependent faults. Slower. Recipes that run no branches concurrently reject it. | Overlap |
 | `--autotune-effort off\|default\|audit` | Kernel search effort. Off uses heuristics without races; default races the candidates that pass each kernel family's performance exclusions; audit lifts those exclusions and races every legal candidate, to check that the default search prunes no winners. Overrides `[preparation] autotune_effort`. | Default |
@@ -425,10 +425,10 @@ not kernel selection, so its packages share tuned kernels with overlapped ones.
 
 Gemma 4 defaults to four concurrent requests and six speculative target-token
 rows. Other recipes default to 32 concurrent requests and 128 target-token rows.
-Qwen3.8 Flash, Qwen3.8 27B, and GLM 5.3 use rectangular catalogs covering five
+Qwen3.8 Flash with MTP and GLM 5.3 use rectangular catalogs covering five
 drafts through batch 16 and three at batch 32. Step-5's rectangular catalog
 covers its full three-draft depth at batch 32. DeepSeek V4/V4.1, MiMo V2.6 Pro,
-Kimi K3, Nemotron Bolt, and MiniMax M3.1 use packed catalogs with a default
+Kimi K3, Nemotron Bolt, MiniMax M3.1, and Qwen3.8 dense or Flash Next with DFlash2 use packed catalogs with a default
 budget of 64 round graphs plus width-one continuations. Each recipe selects
 its proposal and prefix-allocation mode.
 DeepSeek V4.1 defaults to seven draft tokens, concurrency 32, a 4096-token
@@ -1184,7 +1184,7 @@ Gemma 4 derives the larger of padded concurrency and draft count plus one,
 giving six rows at its defaults.
 Both sections also accept positive integer `speculative_graph_budget`, overridden
 by `--speculative-graph-budget`. Packed recipes declare 64 round graphs.
-The `[defaults]` graph budget applies only to active packed adaptive learned
+The `[defaults]` graph budget applies only to active packed learned
 speculation; unsupported recipes, `--no-mtp`, and zero draft depth ignore it.
 An explicit flag or model-specific graph budget rejects those incompatible modes.
 Neither capacity setting changes the graphs in an already exported package;

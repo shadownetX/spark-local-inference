@@ -441,7 +441,7 @@ Export Qwen with up to five MTP draft tokens per round:
 ```
 
 Qwen defaults to 32 concurrent requests, five MTP draft tokens, and 128 target-token
-rows, with explicit flags and configuration taking precedence. Verification is
+rows, with explicit flags and configuration taking precedence. MTP verification is
 rectangular: the default catalog covers five drafts per request through batch 16
 and three drafts at batch 32. Already exported packages retain their captured
 capacities.
@@ -450,8 +450,15 @@ capacities.
 [`incoai/Qwen3.8-Flash-Next-DFlash2`](https://huggingface.co/incoai/Qwen3.8-Flash-Next-DFlash2)
 at revision `a22a1744e85c17364dcc54a6a420af7135d4c7f6` instead of the checkpoint's
 MTP module. Draft proposals use an eight-token block and up to seven verified
-drafts; the default remains five drafts and 128 target-token rows. The target
-captures completed zero-based layers 5, 15, 25, 35, and 45 after averaging its four
+drafts; the default remains five drafts and 128 target-token rows. The
+verification catalog shares those physical rows across request prefixes while
+retaining the configured per-request width. `--speculative-graph-budget` bounds
+the packed catalog to 64 graphs by default, excluding width-one rounds. Fixed
+and adaptive verification use the same physical catalog; width-one rounds retain
+draft context. The catalog captures the configured positive draft depth and
+width one; preparing another positive draft depth requires another export.
+Existing packages retain their captured catalogs.
+The target captures completed zero-based layers 5, 15, 25, 35, and 45 after averaging its four
 hyperconnection streams. Five independent draft attention layers retain the last
 2,048 accepted target positions. These rings are included in continuation
 snapshots and restored with the target's GDN, QSA, PLE, and position state.

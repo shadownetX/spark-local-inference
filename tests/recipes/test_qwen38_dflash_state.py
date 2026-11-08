@@ -14,7 +14,8 @@ pytestmark = pytest.mark.skipif(os.environ.get("FLARE_RUN_CUDA_TESTS") != "1",
 
 
 @torch.no_grad()
-def test_packed_target_metadata_capture_and_width_one_transition():
+@pytest.mark.parametrize("physical_tokens", [5, 9, 12])
+def test_packed_target_metadata_capture_and_width_one_transition(physical_tokens):
     from ignition.components.paged_batch import Metadata
     from ignition.recipes.qwen38.decoder_state import DecoderInputs
     from ignition.recipes.qwen38.dflash import PreparedTargetState
@@ -35,7 +36,7 @@ def test_packed_target_metadata_capture_and_width_one_transition():
     previous = torch.tensor([2, 4, 6, 7], device=device, dtype=torch.int32)
     owner = SimpleNamespace(inputs=inputs, requests=requests, pool=pool,
         previous_accepted=previous, context=256)
-    metadata = Metadata.allocate(12, 4, 4, device, samples=32, max_query_tokens=8)
+    metadata = Metadata.allocate(physical_tokens, 4, 4, device, samples=32, max_query_tokens=8)
     starts = torch.tensor([62, 70, 128, 0], device=device)
     lengths = torch.tensor([3, 0, 2, 0], device=device, dtype=torch.int32)
     rows = torch.tensor([3, 2, 1, 0], device=device)
@@ -44,7 +45,7 @@ def test_packed_target_metadata_capture_and_width_one_transition():
     tokens = torch.arange(32, device=device).reshape(4, 8) + 100
     metadata.set(starts, lengths, rows, pages, tokens, inputs.live_rows)
     state = PreparedTargetState(owner, metadata)
-    hidden = torch.arange(12, device=device, dtype=torch.bfloat16)[:, None].expand(12, 2560).contiguous()
+    hidden = torch.arange(physical_tokens, device=device, dtype=torch.bfloat16)[:, None].expand(physical_tokens, 2560).contiguous()
     sample = torch.empty((32, 2560), dtype=torch.bfloat16, device=device)
     state.prepare_hidden(hidden, sample)
     counts = torch.tensor([2, 0, 1, 0], device=device, dtype=torch.int32)
@@ -67,7 +68,7 @@ def test_packed_target_metadata_capture_and_width_one_transition():
     assert state.gdn.accepted_tokens.tolist() == [6, 1, 2, 1]
     assert state.gdn.state_indices[:, 0].tolist() == [3, 0, 1, 0]
     assert state.qsa.raw_state_slot_ids.tolist() == [3, -1, 1, -1]
-    assert state.qsa.request_ids.tolist() == [0, 0, 0, 2, 2, -1, -1, -1, -1, -1, -1, -1]
+    assert state.qsa.request_ids.tolist() == [0, 0, 0, 2, 2] + [-1] * (physical_tokens - 5)
     assert state.qsa.query_positions[:5].tolist() == [62, 63, 64, 128, 129]
     assert state.qsa.rope_positions[:5, 0].tolist() == [92, 93, 94, 138, 139]
     assert state.qsa.slot_mapping[:5].tolist() == [126, 127, 128, 704, 705]

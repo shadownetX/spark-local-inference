@@ -169,9 +169,9 @@ class SpeculativePreparation(DFlash2Preparation):
     def buffers(self):
         return {}
 
-    def round(self, batch, width, name):
+    def round(self, batch, width, name, *, target_token_capacity=None):
         operation = PreparedParallelDraftRound(self, batch, width, name,
-            buffers=self.round_buffers.cursor())
+            target_token_capacity=target_token_capacity, buffers=self.round_buffers.cursor())
         operation.prepare()
         self.owners.append(operation)
         return operation
