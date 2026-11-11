@@ -37,6 +37,9 @@ pub struct Node<L> {
     pub location: L,
     children: u32,
     ready_children: u32,
+    /// A nearby descendant may replace the next prompt; preserve this resume row.
+    /// Sticky until eviction, including after the close child is removed.
+    close_child_seen: bool,
     pins: u32,
     accessed: u64,
     pub last_used: SystemTime,
@@ -231,6 +234,7 @@ impl<L> Index<L> {
     pub fn row_redundant(&self, key: &PrefixKey, ready_only: bool) -> bool {
         self.node(key).is_some_and(|node| {
             node.parent.is_some()
+                && !node.close_child_seen
                 && if ready_only {
                     node.ready_children == 1
                 } else {
@@ -288,6 +292,14 @@ impl<L> Index<L> {
                 "host record must extend its parent by exactly its tail pages",
             ));
         }
+        // A prompt less than one physical page after a message does not make
+        // the message row redundant: the next request may branch there.
+        // Record the close child after validation, even if it is later removed.
+        if let Some(parent) = parent
+            && key.consumed_tokens - parent.consumed_tokens < self.page_tokens
+        {
+            self.nodes.get_mut(&parent).unwrap().close_child_seen = true;
+        }
         let accessed = self.tick();
         if ready && let Some(parent) = parent {
             self.nodes.get_mut(&parent).unwrap().ready_children += 1;
@@ -311,6 +323,7 @@ impl<L> Index<L> {
                 location,
                 children: 0,
                 ready_children: 0,
+                close_child_seen: false,
                 pins: 0,
                 accessed,
                 last_used,
@@ -897,6 +910,52 @@ mod tests {
                 .is_err()
         );
         assert_eq!(index.node(&missing).unwrap().children(), 1);
+    }
+
+    #[test]
+    fn close_prompt_child_must_not_destroy_a_rewind_endpoint() {
+        let mut index = Index::new(64);
+        let cold = history(256);
+        insert(&mut index, &cold, 64, None);
+        insert(&mut index, &cold, 127, Some(64));
+        insert(&mut index, &cold, 129, Some(127));
+        let message_key = cold.key_at(127).unwrap();
+
+        // Eager disk/DRAM thinning must not discard a branchable message row.
+        if index.row_redundant(&message_key, true) {
+            index.drop_row(&message_key);
+        }
+
+        let mut warm = history(127);
+        warm.append(&[777, 888], &[]).unwrap();
+        let found = index
+            .lookup_below(&warm, 0, u64::MAX, |node| node.ready)
+            .unwrap();
+        assert_eq!(found.consumed_tokens, 127);
+    }
+
+    #[test]
+    fn close_child_retention_survives_child_eviction() {
+        let mut index = Index::new(64);
+        let full = history(384);
+        insert(&mut index, &full, 64, None);
+        insert(&mut index, &full, 127, Some(64));
+        insert(&mut index, &full, 129, Some(127));
+        let message_key = full.key_at(127).unwrap();
+        let close_child = full.key_at(129).unwrap();
+
+        assert!(!index.row_redundant(&message_key, true));
+        index.remove_node(&close_child).unwrap();
+        insert(&mut index, &full, 256, Some(127));
+        // The later long child must not erase a previously protected endpoint.
+        assert!(!index.row_redundant(&message_key, true));
+
+        // A fresh index reconstructs the protection from persisted close links.
+        let mut restored = Index::new(64);
+        insert(&mut restored, &full, 64, None);
+        insert(&mut restored, &full, 127, Some(64));
+        insert(&mut restored, &full, 129, Some(127));
+        assert!(!restored.row_redundant(&message_key, true));
     }
 
     #[test]

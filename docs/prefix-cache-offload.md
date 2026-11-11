@@ -267,13 +267,18 @@ disk store evicts any unpinned node, and the composite restricts the memory
 store to durable nodes.
 
 Disk drops a non-root record's row once its only child commits, keeping the
-pages. DRAM retains these redundant rows while its free retention space exceeds
-two continuation rows. Reserved transfer intake does not count as retention
-headroom. When that threshold is reached, or an incoming record needs more
-space than is free, DRAM reclaims eligible redundant rows before evicting other
-records. Readers and spills delay row removal until their pins are released.
-DRAM releases row slots, disk truncates at the row segment, and later spills
-omit removed rows. A rewind or later fork restores its retained endpoint when
+pages, except when a descendant less than one physical page later has been
+indexed. Such close-child ancestors retain their resume rows for divergent
+continuations, even after that child is removed. The marker is held in memory;
+startup reconstructs it from the surviving parent-child links. DRAM likewise
+excludes those ancestors from redundant-row thinning; capacity-driven record
+eviction and compaction are still possible. Other redundant rows remain in DRAM
+while its free retention space exceeds two continuation rows. Reserved transfer
+intake does not count as retention headroom. When that threshold is reached, or
+an incoming record needs more space than is free, DRAM reclaims eligible
+redundant rows before evicting other records. Readers and spills delay row
+removal until their pins are released. DRAM releases row slots, disk truncates
+at the row segment, and later spills omit removed rows. A rewind or later fork restores its retained endpoint when
 available; otherwise it restores the nearest row-bearing ancestor and
 re-prefills the remaining tokens.
 With lazy write-behind, a crash or an incomplete shutdown drain can lose the
