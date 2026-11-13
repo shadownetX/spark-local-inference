@@ -1,3 +1,9 @@
+[ ] Qualify native mixed-prefill graph selection on Qwen3.8 Flash with a
+    single mixed-enabled export, comparing enabled and disabled serving at
+    fixed and adaptive MTP depths. Check CUDA loading, concurrent prompt/decode
+    progress, cache reuse, graph launch counts, and latency on SM121; verify
+    selected catalogs and native replay across tensor-parallel ranks.
+
 [ ] Ensure Rust bridge updates relink the WinUI executable during incremental
     builds. MSBuild can retain flare-winui.exe after the bridge library changes;
     verify loose and single-file outputs without requiring /t:Rebuild.
