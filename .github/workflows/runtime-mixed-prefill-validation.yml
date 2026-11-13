@@ -1,0 +1,34 @@
+name: Runtime mixed prefill CPU validation
+on:
+  push:
+    branches: [ci/runtime-mixed-prefill]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  mixed-prefill:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build nasm protobuf-compiler libssl-dev liburing-dev
+      - name: Test mixed graph selection and resource pruning
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --locked --release --manifest-path helios/Cargo.toml --target-dir flare-cli/target --features runtime-core,server --lib runtime_core::selection::tests::mixed -- --nocapture 2>&1 | tee "$RUNNER_TEMP/mixed-selection.log"
+          grep -Eq 'test result: ok\. [1-9][0-9]* passed; 0 failed;' "$RUNNER_TEMP/mixed-selection.log"
+      - name: Test scheduler progress without mixed graphs
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --locked --release --manifest-path helios/Cargo.toml --target-dir flare-cli/target --features runtime-core,server --lib empty_mixed_catalog_completes_overlapping_prompt_and_generation -- --nocapture 2>&1 | tee "$RUNNER_TEMP/mixed-scheduler.log"
+          grep -Eq 'test result: ok\. 1 passed; 0 failed;' "$RUNNER_TEMP/mixed-scheduler.log"
+      - name: Test CLI overrides and peer forwarding
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --locked --release --manifest-path flare-cli/Cargo.toml mixed_prefill_flags_override_and_reach_remote_ranks -- --nocapture 2>&1 | tee "$RUNNER_TEMP/mixed-cli.log"
+          grep -Eq 'test result: ok\. 1 passed; 0 failed;' "$RUNNER_TEMP/mixed-cli.log"
