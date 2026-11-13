@@ -1,0 +1,39 @@
+name: Packed DFlash2 CPU validation
+on:
+  push:
+    branches: [ci/packed-dflash2-233]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  packed-dflash2:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      FLARE_RUN_CUDA_TESTS: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build nasm protobuf-compiler libssl-dev liburing-dev
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: false
+      - name: Install locked preparation and test environment
+        run: uv sync --locked --extra prepare --extra test
+      - name: Run focused CPU regression suite
+        run: |
+          .venv/bin/python -m pytest -q -rs \
+            tests/cli/test_speculative_method.py \
+            tests/cli/test_speculative_graph_budget.py \
+            tests/cli/test_planning.py \
+            tests/components/test_packed_speculative_capacity.py \
+            tests/components/test_speculative_capacity.py \
+            tests/components/test_request_capacity.py \
+            tests/components/test_parallel_draft_metadata.py \
+            tests/preparation/test_packed_speculative_contract.py \
+            tests/recipes/test_qwen38_decoder_capacity.py \
+            tests/recipes/test_qwen38_dflash_preparation.py \
+            tests/recipes/test_qwen38_dflash_state.py
