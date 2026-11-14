@@ -17,7 +17,7 @@ use std::{
 };
 
 type CacheResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
-const SCHEMA: u32 = 1;
+const SCHEMA: u32 = 2;
 const MAX_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,7 +26,8 @@ struct Scope {
     gpu: [u8; 16],
     executable: [u8; 32],
     abi: u32,
-    context: usize,
+    prepared_sequence_tokens: usize,
+    max_sequence_tokens: usize,
     max_active: usize,
     graphs: Vec<String>,
 }
@@ -74,7 +75,9 @@ impl Cache {
                 gpu: crate::cuda::device_uuid(manifest.device)?,
                 executable: executable_digest()?,
                 abi: manifest.abi_version,
-                context: manifest.context,
+                // manifest.context is the CUDA context handle, not a token limit.
+                prepared_sequence_tokens: model.prepared_sequence_tokens,
+                max_sequence_tokens: model.limits.max_sequence_tokens,
                 max_active: manifest.max_active,
                 graphs,
             },
@@ -94,7 +97,7 @@ impl Cache {
         }
         let stored: Stored = serde_json::from_slice(&bytes)?;
         if stored.schema != SCHEMA || stored.scope != self.scope {
-            return Err("scheduler cost cache scope mismatch".into());
+            return Err("scheduler cost cache scope or schema mismatch".into());
         }
         Ok(scheduler.restore_graph_costs(&stored.costs)?)
     }
