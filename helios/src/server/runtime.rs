@@ -16,6 +16,9 @@ use std::{
 
 use tokio::sync::{mpsc as async_mpsc, oneshot};
 
+#[cfg(all(feature = "runtime-core", target_os = "linux"))]
+mod cost_cache;
+
 use crate::{
     AdmissionError, Error, ExecutionError, Failure, Result, Shutdown,
     cache::ConditioningEvent,
@@ -527,6 +530,11 @@ impl ModelRuntime {
                 // SAFETY: start's caller retains all prepared resources through
                 // confirmed drain. This thread exclusively owns the executor;
                 // construction binds both streams to the manifest's context.
+                #[cfg(all(feature = "runtime-core", target_os = "linux"))]
+                let cost_cache_path = if peers.is_none() {
+                    std::env::var_os("FLARE_EXPERIMENTAL_SCHEDULER_COST_CACHE")
+                        .filter(|path| !path.is_empty()).map(std::path::PathBuf::from)
+                } else { None };
                 let mut executor = match unsafe { RankExecutor::new(manifest, peers) } {
                     Ok(executor) => executor,
                     Err(error) => {
@@ -622,6 +630,26 @@ impl ModelRuntime {
                     shutdown.error = Some(error);
                     return shutdown;
                 }
+                #[cfg(all(feature = "runtime-core", target_os = "linux"))]
+                let cost_cache = cost_cache_path.and_then(|path| {
+                    match cost_cache::Cache::new(path, &worker_config, executor.manifest()) {
+                        Ok(cache) => {
+                            match cache.load(&mut scheduler) {
+                                Ok(n) if n != 0 && log_to_stderr =>
+                                    eprintln!("SCHEDULER_COST_CACHE restored={n}"),
+                                Ok(_) => {},
+                                Err(error) if log_to_stderr =>
+                                    eprintln!("SCHEDULER_COST_CACHE ignored: {error}"),
+                                Err(_) => {},
+                            }
+                            Some(cache)
+                        }
+                        Err(error) => {
+                            if log_to_stderr { eprintln!("SCHEDULER_COST_CACHE disabled: {error}"); }
+                            None
+                        }
+                    }
+                });
                 // The host prefix store opens its transfer threads on every
                 // rank's context, which the loader prepared for this process.
                 let store = match executor
@@ -682,6 +710,19 @@ impl ModelRuntime {
                 let mut shutdown = executor.close();
                 worker.close_store(&mut shutdown);
                 if shutdown.drained {
+                    #[cfg(all(feature = "runtime-core", target_os = "linux"))]
+                    if error.is_none() && shutdown.error.is_none() {
+                        if let Some(cache) = cost_cache {
+                            match cache.save(&worker.scheduler) {
+                                Ok(n) if n != 0 && log_to_stderr =>
+                                    eprintln!("SCHEDULER_COST_CACHE saved={n}"),
+                                Ok(_) => {},
+                                Err(error) if log_to_stderr =>
+                                    eprintln!("SCHEDULER_COST_CACHE save failed: {error}"),
+                                Err(_) => {},
+                            }
+                        }
+                    }
                     let _ = worker.scheduler.release_after_shutdown(&shutdown);
                     worker_metrics.scheduler(worker.scheduler.stats());
                 }
