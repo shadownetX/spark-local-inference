@@ -1,0 +1,22 @@
+name: Graph cost cache validation
+on:
+  pull_request:
+    branches: [feature/scheduler-cost-base]
+permissions:
+  contents: read
+jobs:
+  graph-costs:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build nasm protobuf-compiler libssl-dev liburing-dev
+      - name: Build native runtime
+        run: cargo build --locked --release --manifest-path flare-cli/Cargo.toml
+      - name: Test scheduler and persistence
+        run: |
+          cargo test --locked --release --manifest-path helios/Cargo.toml --target-dir flare-cli/target --features runtime-core,server --lib restored_
+          cargo test --locked --release --manifest-path helios/Cargo.toml --target-dir flare-cli/target --features runtime-core,server --lib mismatched_or_invalid_records_do_not_modify_costs
+          cargo test --locked --release --manifest-path helios/Cargo.toml --target-dir flare-cli/target --features runtime-core,server --lib graph_cost_cache_
