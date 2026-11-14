@@ -17,6 +17,7 @@ pub struct LoadedSession {
     manifest: ExecutionManifest,
     peers: Option<RankPeers>,
     bootstrap: Bootstrap,
+    graph_cost_cache: Option<super::GraphCostCacheLocation>,
     // CUDA contexts outlive all retained manifest/peer bindings, including
     // registered host storage when a loaded session is dropped before start.
     owner: NativeModel,
@@ -37,8 +38,17 @@ impl LoadedSession {
             manifest,
             peers,
             bootstrap,
+            graph_cost_cache: None,
             owner,
         })
+    }
+
+    /// Supply the application's cache directory for authenticated single-device timings.
+    #[cfg(target_os = "linux")]
+    pub fn set_graph_cost_cache_root(&mut self, root: std::path::PathBuf) {
+        if self.peers.is_none() {
+            self.graph_cost_cache = Some((root, self.owner.core_envelope_digest()));
+        }
     }
 
     pub fn server_config_mut(&mut self) -> &mut ServerConfig {
@@ -51,6 +61,7 @@ impl LoadedSession {
             manifest,
             peers,
             bootstrap,
+            graph_cost_cache,
         } = self;
         // Assume an unconfirmed drain before entering code that may launch GPU work.
         // Unwinding also retains the owner rather than freeing referenced storage.
@@ -58,13 +69,14 @@ impl LoadedSession {
         // SAFETY: The session owns the loaded model and grants its worker exclusive
         // execution. The guard retains the resources when drain is unconfirmed.
         let server = unsafe {
-            Server::start(
+            Server::start_with_graph_cost_cache(
                 manifest,
                 bootstrap.model,
                 bootstrap.frontend,
                 bootstrap.images,
                 bootstrap.server,
                 peers,
+                graph_cost_cache,
             )
         };
         match server {

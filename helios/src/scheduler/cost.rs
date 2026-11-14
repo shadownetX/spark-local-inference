@@ -52,6 +52,8 @@ struct Estimate {
     replays: ReplayTimes,
     observed_at_ns: u64,
     last_attempt_ns: u64,
+    // A restored timing is a prior, not a live observation.
+    seeded: bool,
 }
 
 #[derive(Default)]
@@ -82,7 +84,7 @@ impl ReplayTimes {
 
 impl Estimate {
     fn fresh(&self, now_ns: u64, ttl_ns: u64) -> bool {
-        self.nanos != 0 && now_ns.saturating_sub(self.observed_at_ns) < ttl_ns
+        self.nanos != 0 && !self.seeded && now_ns.saturating_sub(self.observed_at_ns) < ttl_ns
     }
 }
 
@@ -114,6 +116,7 @@ impl ActionCosts {
         estimate.nanos = nanos;
         estimate.replays.observe(nanos, false);
         estimate.observed_at_ns = self.now_ns;
+        estimate.seeded = false;
         self.refresh_packed_durations();
     }
 
@@ -139,6 +142,7 @@ impl ActionCosts {
                     replays: ReplayTimes::default(),
                     observed_at_ns: 0,
                     last_attempt_ns: 0,
+                    seeded: false,
                 },
             ));
         }
@@ -148,6 +152,46 @@ impl ActionCosts {
             ttl_ns: super::PolicyConfig::default().estimate_ttl_ns, ..Default::default() };
         costs.refresh_packed_durations();
         Ok(costs)
+    }
+
+    #[cfg(any(test, all(feature = "server", feature = "runtime-core", target_os = "linux")))]
+    fn persistent_key(key: Key) -> String {
+        format!("{:?}:{}:{}:{}:{}:{}", key.kind, key.batch, key.drafts,
+            key.tokens, key.prefill, key.packed)
+    }
+
+    #[cfg(any(test, all(feature = "server", feature = "runtime-core", target_os = "linux")))]
+    pub(super) fn retained_durations(&self) -> Vec<(String, u64)> {
+        let mut records: Vec<_> = self.entries.iter()
+            .map(|(key, estimate)| (Self::persistent_key(*key), estimate.nanos))
+            .collect();
+        records.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        records
+    }
+
+    /// Load only a complete, matching physical catalog. Zero remains unknown;
+    /// nonzero priors rank normally but require fresh live execution feedback.
+    #[cfg(any(test, all(feature = "server", feature = "runtime-core", target_os = "linux")))]
+    pub(super) fn restore_durations(&mut self, records: &[(String, u64)]) -> Result<usize> {
+        let expected = self.retained_durations();
+        if records.len() != expected.len() || records.iter().zip(&expected).any(|(a, b)|
+            a.0 != b.0 || a.1 > 600_000_000_000 || b.1 != 0)
+        {
+            return Err("scheduler cost cache does not match the unmeasured graph catalog".into());
+        }
+        let by_key: std::collections::HashMap<_, _> = records.iter()
+            .map(|(key, nanos)| (key.as_str(), *nanos)).collect();
+        let mut restored = 0;
+        for (key, estimate) in &mut self.entries {
+            let nanos = by_key[Self::persistent_key(*key).as_str()];
+            if nanos != 0 {
+                estimate.nanos = nanos;
+                estimate.seeded = true;
+                restored += 1;
+            }
+        }
+        self.refresh_packed_durations();
+        Ok(restored)
     }
 
     pub fn advance_to(&mut self, now_ns: u64, ttl_ns: u64) {
@@ -238,7 +282,7 @@ impl ActionCosts {
 
     pub fn observation(&self, key: Key) -> Option<(u64, Option<u64>, bool)> {
         self.entry(key).map(|estimate| (estimate.nanos,
-            (estimate.nanos != 0).then_some(estimate.observed_at_ns),
+            (estimate.nanos != 0 && !estimate.seeded).then_some(estimate.observed_at_ns),
             estimate.fresh(self.now_ns, self.ttl_ns)))
     }
 
@@ -271,6 +315,7 @@ impl ActionCosts {
             let fresh = estimate.fresh(self.now_ns, self.ttl_ns);
             estimate.nanos = estimate.replays.observe(sample, fresh);
             estimate.observed_at_ns = self.now_ns;
+            estimate.seeded = false;
             self.refresh_packed_durations();
         }
     }
@@ -278,7 +323,40 @@ impl ActionCosts {
 
 #[cfg(test)]
 mod tests {
-    use super::ReplayTimes;
+    use super::{ActionCosts, ReplayTimes};
+
+    #[test]
+    fn restored_costs_are_known_but_not_fresh() {
+        let graphs = super::super::tests::duration_graphs(1);
+        let mut source = ActionCosts::prepared(&graphs, 8).unwrap();
+        let key = source.entries[0].0;
+        source.entries[0].1.nanos = 12_000_000;
+        let records = source.retained_durations();
+        let mut destination = ActionCosts::prepared(&graphs, 8).unwrap();
+        assert_eq!(destination.restore_durations(&records).unwrap(), 1);
+        assert_eq!(destination.duration_key(key), Some(12_000_000));
+        assert_eq!(destination.observation(key), Some((12_000_000, None, false)));
+        assert!(!destination.is_fresh(key));
+        assert!(destination.stale_keys().any(|candidate| candidate == key));
+        assert_eq!(destination.retained_durations(), records);
+        assert!(destination.restore_durations(&records).is_err());
+    }
+
+    #[test]
+    fn mismatched_or_invalid_records_do_not_modify_costs() {
+        let graphs = super::super::tests::duration_graphs(1);
+        let mut destination = ActionCosts::prepared(&graphs, 8).unwrap();
+        let original = destination.retained_durations();
+        let mut records = original.clone();
+        records[0].1 = 123;
+        records[1].0.push_str("-wrong");
+        assert!(destination.restore_durations(&records).is_err());
+        assert_eq!(destination.retained_durations(), original);
+        let mut records = original.clone();
+        records[0].1 = u64::MAX;
+        assert!(destination.restore_durations(&records).is_err());
+        assert_eq!(destination.retained_durations(), original);
+    }
 
     #[test]
     fn isolated_slow_replay_does_not_displace_the_steady_cost() {

@@ -301,6 +301,30 @@ Stale physical dispatches also require an empty queue and completion feedback,
 while retaining their measured costs for ranking. Commit rechecks freshness
 because a saved plan can outlive the estimate's freshness interval.
 
+## Retained graph durations across serving sessions
+
+The Flare application supplies a local scheduler-cost directory under
+`~/.cache/flare/scheduler-costs/` when starting an authenticated Linux
+single-device core. The file is scoped by the signed core envelope, GPU UUID,
+runtime executable digest, driver versions, selected sequence limits and
+physical graph catalog. Missing or incompatible files leave the catalog
+unmeasured. The store contains only physical graph duration estimates, not
+request state or token histories.
+
+A restored nonzero duration is known but stale: it participates in ordinary
+ranking and receives live feedback under the same stale-estimate rules as
+an expired observation. Zero still denotes an unmeasured shape. The first
+valid live timing replaces the retained prior; monotonic timestamps, replay
+windows, learning credits and request-local acceptance estimates are not
+carried across sessions.
+
+The worker reads before readiness and writes a bounded snapshot on clean
+drained shutdown. Atomic replacement prevents readers from observing a
+partially written file. Cache errors do not prevent serving. There is no file
+I/O in the scheduling loop. Multi-device and remote-rank timings are not
+restored by the single-device cache because they depend on the participating
+devices and communication topology.
+
 ## Funded timing refresh
 
 Ordinary valid completions earn `0.002 / 0.998` times their measured execution

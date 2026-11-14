@@ -1024,6 +1024,19 @@ impl RequestScheduler {
         Ok(())
     }
 
+    #[cfg(all(feature = "server", feature = "runtime-core", target_os = "linux"))]
+    pub(crate) fn retained_graph_costs(&self) -> Vec<(String, u64)> {
+        self.costs.retained_durations()
+    }
+
+    #[cfg(all(feature = "server", feature = "runtime-core", target_os = "linux"))]
+    pub(crate) fn restore_graph_costs(&mut self, records: &[(String, u64)]) -> Result<usize> {
+        if self.submitted != Fence(0) || self.slots.iter().any(|s| s.request.is_some()) {
+            return Err("scheduler costs must be restored before admission".into());
+        }
+        self.costs.restore_durations(records)
+    }
+
     pub fn estimated_duration_ns(&self, step: &ScheduledStep) -> Option<u64> {
         self.costs.get(step)
     }
@@ -1073,7 +1086,7 @@ impl RequestScheduler {
     fn selected_cost(&self, key: cost::Key) -> SelectedCost {
         let (retained_ns, observed_at_ns, fresh) = self.costs.observation(key).unwrap_or((0, None, false));
         SelectedCost { retained_ns, observed_at_ns, selected_at_ns: self.now_ns,
-            freshness: if observed_at_ns.is_none() { CostFreshness::Unknown }
+            freshness: if retained_ns == 0 { CostFreshness::Unknown }
                 else if fresh { CostFreshness::Fresh } else { CostFreshness::Stale } }
     }
 
@@ -2142,9 +2155,8 @@ impl RequestScheduler {
             return Err("submission fences must increase within int64 range".into());
         }
         let key = cost::Key::from_step(step);
-        let observed_at_ns = self.costs.observation(key).and_then(|(_, observed, _)| observed);
         let origin = match plan.origin {
-            PlanOrigin::Ordinary if observed_at_ns.is_none() => PlanOrigin::Discovery,
+            PlanOrigin::Ordinary if self.costs.duration_key(key).unwrap_or(0) == 0 => PlanOrigin::Discovery,
             origin => origin,
         };
         self.refresh.validate(origin)?;

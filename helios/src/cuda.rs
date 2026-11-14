@@ -315,6 +315,20 @@ pub(crate) fn device_uuid(device: i32) -> Result<[u8; 16]> {
     Ok(uuid)
 }
 
+/// CUDA driver API version used for graph timing cache compatibility.
+#[cfg(all(feature = "server", feature = "runtime-core", target_os = "linux"))]
+pub(crate) fn driver_version() -> Result<i32> {
+    let driver = Driver::load()?;
+    // SAFETY: CUDA exports this signature and Driver retains the library.
+    let version: libloading::Symbol<'_, unsafe extern "C" fn(*mut c_int) -> c_int> = unsafe {
+        driver._library.get(b"cuDriverGetVersion\0")
+    }.map_err(|_| Error::from("cannot resolve cuDriverGetVersion"))?;
+    let mut value = 0;
+    // SAFETY: value is a valid writable int.
+    driver.check("cuDriverGetVersion", unsafe { version(&mut value) })?;
+    Ok(value)
+}
+
 /// Page-locked registration of process memory, released on drop.
 pub(crate) struct HostRegistration {
     driver: Arc<Driver>,
