@@ -20,6 +20,7 @@ use blake2::{Blake2b, Digest, digest::consts::U32};
 use std::{collections::HashSet, path::Path, thread};
 
 pub struct NativeModel {
+    core_envelope_digest: [u8; 32],
     pub(super) ranks: Vec<NativeResources>,
     _core_files: Vec<std::sync::Arc<std::fs::File>>,
     pub(super) server_config: serde_json::Value,
@@ -272,6 +273,7 @@ impl NativeModel {
         progress: &StartupProgress,
         agree: &mut dyn CacheAgreement,
     ) -> Result<Self> {
+        let core_envelope_digest = authorized.envelope_digest();
         let device_labels = options.device_labels.as_deref().unwrap_or(devices);
         if device_labels.len() != devices.len() {
             return Err(invalid("GPU label count must match selected devices"));
@@ -593,6 +595,7 @@ impl NativeModel {
         // the buffered startup readers close when loading returns.
         let core_files = files.retained_files()?;
         let mut model = Self {
+            core_envelope_digest,
             _core_files: core_files,
             ranks: Vec::new(),
             server_config,
@@ -953,6 +956,11 @@ impl NativeModel {
             .collect()
     }
 
+    /// Digest of the authenticated core envelope used to load this model.
+    pub fn core_envelope_digest(&self) -> [u8; 32] {
+        self.core_envelope_digest
+    }
+
     pub fn server_config(&self) -> &serde_json::Value {
         &self.server_config
     }
@@ -1069,6 +1077,7 @@ mod tests {
     fn disabled_offload_needs_no_model_metadata_or_cuda_resources() {
         let progress = StartupProgress::silent();
         let mut model = NativeModel {
+            core_envelope_digest: [0; 32],
             _core_files: Vec::new(),
             ranks: Vec::new(),
             server_config: serde_json::Value::Null,

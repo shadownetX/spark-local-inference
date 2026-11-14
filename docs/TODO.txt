@@ -461,3 +461,9 @@
 [ ] Publish Debian packages with releases and update the APT repository from
     them. release.yml builds no .deb, and no tracked tool builds or signs an
     APT index. See debian.md and release.md.
+
+[ ] Qualify retained graph duration priors across clean serving restarts on
+    additional single-device cores and validate their interaction with startup
+    tuning and optional checkpoint selection. Repeat paired empty/restored
+    runs with equivalent request work and report streaming-tail and throughput
+    trade-offs. Tensor-parallel and Windows persistence are not implemented.

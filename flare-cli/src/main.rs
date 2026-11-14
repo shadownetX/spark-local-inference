@@ -631,6 +631,10 @@ fn serve_local(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let phase = progress.phase("Load tokenizer", None);
     let mut loaded = flare_helios::server::LoadedSession::new(owner, config)?;
+    #[cfg(target_os = "linux")]
+    if let Ok(home) = environment::home_directory() {
+        loaded.set_graph_cost_cache_root(home.join(".cache/flare/scheduler-costs"));
+    }
     loaded.server_config_mut().log_to_stderr = true;
     phase.finish("tokenizer ready");
     let phase = progress.phase("Start server", None);

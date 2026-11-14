@@ -65,6 +65,8 @@ use std::{
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
 
+type GraphCostCacheLocation = (std::path::PathBuf, [u8; 32]);
+
 pub struct ServerConfig {
     /// Write operational diagnostics to stderr for command-line callers.
     pub log_to_stderr: bool,
@@ -224,6 +226,19 @@ impl Server {
         config: ServerConfig,
         peers: Option<crate::execution::RankPeers>,
     ) -> std::result::Result<Self, StartFailure> {
+        unsafe { Self::start_with_graph_cost_cache(manifest, model, frontend, images, config, peers, None) }
+    }
+
+    /// The same exclusive resource and drain contract as `start` applies.
+    unsafe fn start_with_graph_cost_cache(
+        manifest: ExecutionManifest,
+        model: ModelConfig,
+        frontend: Frontend,
+        images: Option<ImageProcessor>,
+        config: ServerConfig,
+        peers: Option<crate::execution::RankPeers>,
+        graph_cost_cache: Option<GraphCostCacheLocation>,
+    ) -> std::result::Result<Self, StartFailure> {
         if model.contract.vision.enabled() != images.is_some() {
             return Err("image processor must match prepared vision capabilities".into());
         }
@@ -251,7 +266,7 @@ impl Server {
         // their owners until drain. This server propagates that obligation to the
         // model worker and reports uncertain drain through StartFailure or close.
         let model = Arc::new(unsafe {
-            ModelRuntime::start_retaining_drain(
+            ModelRuntime::start_with_graph_cost_cache(
                 manifest,
                 model,
                 config.queue_capacity,
@@ -260,6 +275,7 @@ impl Server {
                 peers,
                 config.scheduling_policy,
                 config.log_to_stderr,
+                graph_cost_cache,
             )?
         });
         let state = Arc::new(HttpState {

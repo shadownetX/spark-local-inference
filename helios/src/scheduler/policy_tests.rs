@@ -36,6 +36,34 @@ fn padding_pruning_keeps_three_requests_on_batch_four_and_two_requests_on_batch_
 }
 
 #[test]
+fn restored_decode_cost_is_stale_ordinary_work_and_live_feedback_replaces_it() {
+    let mut source = engine(1, false);
+    set_cost(&mut source, GraphKind::Decode, 1, 1, 12 * MS);
+    let records = source.costs.retained_durations();
+    let mut s = engine(1, false);
+    s.graph_durations(&super::tests::duration_graphs(1)).unwrap();
+    assert!(s.costs.restore_durations(&records).unwrap() > 0);
+    let h = add(&mut s, 1, 64, 128);
+    ready(&mut s, &[h]);
+
+    let plan = s.phase_plan(GraphKind::Decode, Some(h));
+    let key = cost::Key::from_step(&plan);
+    assert_eq!(plan.selected_cost.freshness, CostFreshness::Stale);
+    assert_eq!(plan.selected_cost.observed_at_ns, None);
+    assert_eq!(plan.origin, PlanOrigin::Ordinary);
+    assert!(s.plan_requires_feedback(&plan));
+    let fence = Fence(s.submitted.0 + 1);
+    s.commit(&plan, fence).unwrap();
+    assert_eq!(s.submitted_timing(fence).unwrap().origin, TimingOrigin::Ordinary);
+
+    let mut timing = ExecutionTiming { wall_ns: 2 * MS, ..Default::default() };
+    timing.gpu_ns[0] = Some(2 * MS);
+    s.advance_to(s.now_ns + timing.wall_ns).unwrap();
+    complete_timed(&mut s, &plan, fence, 0, true, timing);
+    assert_eq!(s.costs.observation(key), Some((2 * MS, Some(s.now_ns), true)));
+}
+
+#[test]
 fn faster_padded_estimates_do_not_displace_equivalent_unpadded_work() {
     let mut s = engine(8, false);
     let h = add(&mut s, 1, 64, 128);

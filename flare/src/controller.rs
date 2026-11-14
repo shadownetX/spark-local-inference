@@ -2206,6 +2206,10 @@ impl Worker {
                 return Err(error.to_string());
             }
         };
+        #[cfg(target_os = "linux")]
+        if let Ok(home) = crate::environment::home_directory() {
+            loaded.set_graph_cost_cache_root(home.join(".cache/flare/scheduler-costs"));
+        }
         loaded.server_config_mut().bind = self.settings.runtime.bind()?;
         loaded.server_config_mut().api_key = self.settings.api_key.clone();
         phase.finish("Tokenizer loaded");

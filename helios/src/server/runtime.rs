@@ -16,6 +16,9 @@ use std::{
 
 use tokio::sync::{mpsc as async_mpsc, oneshot};
 
+#[cfg(all(feature = "runtime-core", target_os = "linux"))]
+mod cost_cache;
+
 use crate::{
     AdmissionError, Error, ExecutionError, Failure, Result, Shutdown,
     cache::ConditioningEvent,
@@ -470,6 +473,22 @@ impl ModelRuntime {
         policy: crate::scheduler::PolicyConfig,
         log_to_stderr: bool,
     ) -> std::result::Result<Self, super::StartFailure> {
+        unsafe { Self::start_with_graph_cost_cache(manifest, config, queue_capacity, event_capacity, frontend, peers, policy, log_to_stderr, None) }
+    }
+
+    pub(super) unsafe fn start_with_graph_cost_cache(
+        manifest: ExecutionManifest,
+        config: ModelConfig,
+        queue_capacity: usize,
+        event_capacity: usize,
+        frontend: Arc<crate::frontend::Frontend>,
+        peers: Option<crate::execution::RankPeers>,
+        policy: crate::scheduler::PolicyConfig,
+        log_to_stderr: bool,
+        graph_cost_cache: Option<super::GraphCostCacheLocation>,
+    ) -> std::result::Result<Self, super::StartFailure> {
+        #[cfg(not(all(feature = "runtime-core", target_os = "linux")))]
+        let _ = graph_cost_cache;
         crate::model::catalog::validate(&config, &manifest)?;
         super::observation::initialize_clock();
         if queue_capacity == 0 || queue_capacity > 1024 || !(2..=4096).contains(&event_capacity) {
@@ -527,6 +546,8 @@ impl ModelRuntime {
                 // SAFETY: start's caller retains all prepared resources through
                 // confirmed drain. This thread exclusively owns the executor;
                 // construction binds both streams to the manifest's context.
+                #[cfg(all(feature = "runtime-core", target_os = "linux"))]
+                let graph_cost_cache = if peers.is_none() { graph_cost_cache } else { None };
                 let mut executor = match unsafe { RankExecutor::new(manifest, peers) } {
                     Ok(executor) => executor,
                     Err(error) => {
@@ -622,6 +643,23 @@ impl ModelRuntime {
                     shutdown.error = Some(error);
                     return shutdown;
                 }
+                #[cfg(all(feature = "runtime-core", target_os = "linux"))]
+                let graph_cost_cache = graph_cost_cache.and_then(|(root, core)| {
+                    match cost_cache::Cache::new(root, core, &worker_config, executor.manifest()) {
+                        Ok(cache) => {
+                            match cache.load(&mut scheduler) {
+                                Ok(n) if n > 0 && log_to_stderr => eprintln!("Scheduler graph costs restored: {n}"),
+                                Err(error) if log_to_stderr => eprintln!("warning: scheduler graph cost cache: {error}"),
+                                _ => {}
+                            }
+                            Some(cache)
+                        }
+                        Err(error) => {
+                            if log_to_stderr { eprintln!("warning: scheduler graph cost cache: {error}"); }
+                            None
+                        }
+                    }
+                });
                 // The host prefix store opens its transfer threads on every
                 // rank's context, which the loader prepared for this process.
                 let store = match executor
@@ -682,6 +720,16 @@ impl ModelRuntime {
                 let mut shutdown = executor.close();
                 worker.close_store(&mut shutdown);
                 if shutdown.drained {
+                    #[cfg(all(feature = "runtime-core", target_os = "linux"))]
+                    if error.is_none() && shutdown.error.is_none() {
+                        if let Some(cache) = graph_cost_cache {
+                            match cache.save(&worker.scheduler) {
+                                Ok(n) if n > 0 && log_to_stderr => eprintln!("Scheduler graph costs saved: {n}"),
+                                Err(error) if log_to_stderr => eprintln!("warning: scheduler graph cost cache: {error}"),
+                                _ => {}
+                            }
+                        }
+                    }
                     let _ = worker.scheduler.release_after_shutdown(&shutdown);
                     worker_metrics.scheduler(worker.scheduler.stats());
                 }
